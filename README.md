@@ -1,7 +1,5 @@
 # BDS Helper
 
-English / 日本語
-
 This is an external software designed to enhance the functionality of the Bedrock Dedicated Server (BDS).
 The primary aim is to process logged content and generate scriptevent commands in response.
 
