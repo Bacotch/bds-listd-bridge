@@ -7,7 +7,6 @@ The primary aim is to process logged content and generate scriptevent commands i
 
 This project is licensed under the [MIT License](LICENSE) . See the `LICENSE` file for details.
 
----
 
 ## Inspirations
 
@@ -15,4 +14,3 @@ This project is inspired by and built upon the ideas from the following reposito
 
 * [SKYNETWORK-MCBE/bds-enhancer](https://github.com/SKYNETWORK-MCBE/bds-enhancer)
 
----
