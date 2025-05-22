@@ -1,3 +1,4 @@
+mod action;
 mod app;
 mod consts;
 use app::App;

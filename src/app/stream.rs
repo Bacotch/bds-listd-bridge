@@ -1,11 +1,9 @@
 use crate::consts::LOG_PREFIX;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStdout;
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc::{self, Sender};
 use tokio::time::{sleep, Duration};
 
 static LOG_PREFIX_REGEX: Lazy<Regex> =
@@ -19,8 +17,12 @@ pub struct LogDelimiterStream(mpsc::Receiver<String>);
 
 impl LogDelimiterStream {
     pub fn new(stdout: ChildStdout) {
-        let (tx_log, ty_log) = mpsc::channel::<String>(100);
-        tokio::spawn(Self::a());
+        let (tx, rx) = mpsc::channel::<String>(100);
+        tokio::spawn(Self::run(stdout, tx));
+        Self(rx);
     }
-    async fn a() {}
+    fn run(stdout: ChildStdout, tx: Sender<String>) {
+        let mut reader = BufReader::new(stdout);
+        let mut line_buffer = String::new();
+    }
 }
