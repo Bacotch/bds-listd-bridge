@@ -1,8 +1,4 @@
-# This Project was discontinued
-The current log parsing implementation does not achieve the required accuracy for reliable operation.
-Further development on this feature is being discontinued for now.
-
-# BDS Helper
+# bds-listd-bridge
 
 This is an external software designed to enhance the functionality of the Bedrock Dedicated Server (BDS).
 The primary aim is to process logged content and generate scriptevent commands in response.
