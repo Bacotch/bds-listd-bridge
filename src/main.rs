@@ -1,4 +1,5 @@
 mod app;
+mod consts;
 use app::App;
 use std::env;
 use tokio::main;
