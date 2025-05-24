@@ -1,6 +1,9 @@
+mod log_parser;
 mod stream;
+use log_parser::{LogParser, LogType};
 use std::path::Path;
 use std::process::Stdio;
+use stream::LogDelimiterStream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
@@ -17,6 +20,7 @@ impl App {
             executable_name,
         }
     }
+
     pub async fn run(self) {
         //bedrock_server.exeのパス
         let full_path = Path::new(&self.cwd).join(&self.executable_name);
@@ -54,7 +58,6 @@ impl App {
         let mut stdin_reader = BufReader::new(tokio::io::stdin());
         let mut line = String::new();
         loop {
-            //あとで読むの失敗したくらいで終了しないようにハンドリングしておく
             let bytes_read_res = stdin_reader.read_line(&mut line).await;
             match bytes_read_res {
                 Ok(bytes_read) => {
@@ -98,24 +101,39 @@ impl App {
     }
 
     //3.子プロセスの出力をprintlfで表示する。1と2と3でこのプログラムを挟まないのと同じ動作を実現する。
+    //LogDelimiterとLogParserが存在する
+    //LogParserが解析すべきログであった場合にprintlnされないようにする
     async fn handle_child_stdout(child_stdout: ChildStdout) {
-        //子プロセスの出力をBufReaderでラップ
-        let mut child_stdout_reader = BufReader::new(child_stdout);
-        //lineを初期化
-        let mut line = String::new();
-
-        loop {
-            let bytes_read = child_stdout_reader
-                .read_line(&mut line)
-                .await
-                .expect("Failed to read from child stdout");
-            if bytes_read == 0 {
-                //read_lineがbyte0で返すときは子プロセスが終了したことを表す
-                break;
+        let mut stream = LogDelimiterStream::new(child_stdout);
+        let (log_tx, log_rx) = mpsc::channel::<String>(100);
+        let (logtype_tx, mut logtype_rx) = mpsc::channel::<LogType>(100);
+        tokio::spawn(async move {
+            while let Some(entry) = stream.next().await {
+                if let Err(e) = log_tx.send(entry).await {
+                    eprintln!("App: Failed to send log entry to parser channel: {}", e);
+                    break;
+                }
             }
-            println!("{}", line.trim_end());
-            //lineを空にする
-            line.clear();
+        });
+
+        let parser = LogParser::new(logtype_tx);
+        tokio::spawn(parser.run(log_rx));
+
+        while let Some(logtype) = logtype_rx.recv().await {
+            match logtype {
+                LogType::ListdOutput(payload) => {
+                    println!()
+                }
+                LogType::ListdAction(payload) => {
+                    println!()
+                }
+                LogType::Unknown(log) => {
+                    println!("{}", log.trim_end());
+                }
+                LogType::Regular(log) => {
+                    println!("{}", log.trim_end());
+                }
+            }
         }
     }
 }
