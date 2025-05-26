@@ -1,4 +1,5 @@
 # bds-listd-bridge
+![image](https://github.com/user-attachments/assets/ecf3b9d2-3967-4f67-8977-70816af33c43)
 
 This is an external application designed to enhance the functionality of the Bedrock Dedicated Server (BDS) by processing its `/listd` command output.  
 It acts as a bridge, taking the raw listd log entries, processing them into a structured format, and then sending this formatted data back into the game environment using `/scriptevent` commands.  

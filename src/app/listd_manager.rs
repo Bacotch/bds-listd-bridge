@@ -3,7 +3,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::app::utils::execute_command;
 
-use super::action::{
+use super::listd_types::{
     stringify_listd_custom_result, ListdAction, ListdCustomResult, ListdResults, PlayerId,
 };
 pub struct ListdManager {

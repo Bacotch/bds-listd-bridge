@@ -1,4 +1,4 @@
-use super::action::{parse_listd_action, parse_listd_info, ListdAction, ListdResults};
+use super::listd_types::{parse_listd_action, parse_listd_info, ListdAction, ListdResults};
 use super::consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN};
 use once_cell::sync::Lazy;
 use regex::Regex;
