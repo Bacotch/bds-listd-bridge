@@ -1,4 +1,4 @@
-use crate::consts::LOG_PREFIX;
+use super::consts::LOG_PREFIX;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -10,7 +10,7 @@ static LOG_PREFIX_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(LOG_PREFIX).expect("Failed to init LOG_PREFIX"));
 
 fn remove_newline_suffix(s: &str) -> &str {
-    s.strip_suffix("\n").unwrap_or(s)
+    s.trim_end()
 }
 
 pub struct LogDelimiterStream(mpsc::Receiver<String>);

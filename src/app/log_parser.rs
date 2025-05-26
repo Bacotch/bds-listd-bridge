@@ -1,7 +1,5 @@
-use crate::action::{
-    parse_listd_action, parse_listd_output, ListdActionPayload, ListdOutPutPayload,
-};
-use crate::consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN};
+use super::action::{parse_listd_action, parse_listd_info, ListdAction, ListdResults};
+use super::consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tokio::sync::mpsc;
@@ -13,11 +11,10 @@ static LISTD_OUTPUT_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(LISTD_OUTPUT_PATTERN).expect("Failed to init LISTD_OUTPUT_PATTERN"));
 
 pub enum LogType {
-    Regular(String),                 //そのまま出力
-    Unknown(String),                 //そのまま出力
-    ListdAction(ListdActionPayload), //[listd]{json}の形のやつ、出力しない
-    ListdOutput(ListdOutPutPayload), //###で始まる奴、出力しない。これだけだと別の内容も拾う可能性があるのでもう少し汎用にする？
-                                     //commandプロパティがlistdかどうかとったほうがいい
+    Regular(String),            //そのまま出力
+    Unknown(String),            //そのまま出力
+    ListdAction(ListdAction),   //[listd]{json}の形のやつ、出力しない
+    ListdResults(ListdResults), //###で始まる奴、出力しない。これだけだと別の内容も拾う可能性があるのでもう少し汎用にする？
 }
 
 pub struct LogParser(mpsc::Sender<LogType>);
@@ -26,19 +23,26 @@ pub struct LogParser(mpsc::Sender<LogType>);
 //このログが表示されるべきかも返す
 impl LogType {
     pub fn parse(log: String) -> Self {
-        //listd_outputの処理
         if let Some(payload) = LISTD_OUTPUT_REGEX
             .captures(&log)
             .and_then(|caps| caps.name("json"))
             .and_then(|json_match| {
                 let json_str = json_match.as_str();
-                parse_listd_output(json_str).ok()
+                parse_listd_info(json_str).ok()
             })
         {
             if payload.command == "listd" {
-                //解析した結果のcommandプロパティがlistdであるかどうかを確認。
-                return LogType::ListdOutput(payload);
+                if payload.result.is_empty() {
+                    println!("Unknown");
+                    return LogType::Unknown(log);
+                } else {
+                    let listd_results = payload.result; //resultプロパティを代入。
+                    println!("Results");
+                    return LogType::ListdResults(listd_results);
+                }
+                //解析した結果のcommandプロパティがlistdであるかどうかを確認
             } else {
+                println!("Unknown");
                 return LogType::Unknown(log); //可能性はあるので。別にエラーではない。
             }
         } else if let Some(payload) = LISTD_ACTION_REGEX
@@ -49,9 +53,11 @@ impl LogType {
                 parse_listd_action(json_str).ok()
             })
         {
+            println!("Action");
             return LogType::ListdAction(payload);
         }
         //どのifにも引っかからなかったならそれは普通のログ
+        println!("Regular");
         return LogType::Regular(log);
     }
 }

@@ -1,0 +1,988 @@
+diff --git a/.cargo/config.toml b/.cargo/config.toml
+index b153a26..9be40a8 100644
+--- a/.cargo/config.toml
++++ b/.cargo/config.toml
+@@ -1,2 +1,3 @@
+ [alias]
+-run-dev = "run . C:\\Users\\yuuku\\Documents\\minecraft\\bds\\bedrock_server.exe"
+\ No newline at end of file
++run-dev = "run . C:\\Users\\yuuku\\Documents\\minecraft\\bds\\bedrock_server.exe"
++run-test = "test -- --nocapture"
+\ No newline at end of file
+diff --git a/.gitignore b/.gitignore
+index ea8c4bf..1d91bbb 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1 +1,2 @@
+ /target
++diff.txt
+\ No newline at end of file
+diff --git a/Cargo.lock b/Cargo.lock
+index f404ecf..0b0d581 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2,17 +2,6 @@
+ # It is not intended for manual editing.
+ version = 4
+ 
+-[[package]]
+-name = "BDSHelper"
+-version = "0.1.0"
+-dependencies = [
+- "once_cell",
+- "regex",
+- "serde",
+- "serde_json",
+- "tokio",
+-]
+-
+ [[package]]
+ name = "addr2line"
+ version = "0.24.2"
+@@ -58,6 +47,17 @@ dependencies = [
+  "windows-targets",
+ ]
+ 
++[[package]]
++name = "bds_listd_bridge"
++version = "0.1.0"
++dependencies = [
++ "once_cell",
++ "regex",
++ "serde",
++ "serde_json",
++ "tokio",
++]
++
+ [[package]]
+ name = "bitflags"
+ version = "2.9.1"
+diff --git a/Cargo.toml b/Cargo.toml
+index 40fb342..58590b7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,5 +1,5 @@
+ [package]
+-name = "BDSHelper"
++name = "bds_listd_bridge"
+ version = "0.1.0"
+ edition = "2024"
+ 
+diff --git a/diff.txt b/diff.txt
+index e69de29..85d5ccb 100644
+--- a/diff.txt
++++ b/diff.txt
+@@ -0,0 +1,325 @@
++diff --git a/diff.txt b/diff.txt
++new file mode 100644
++index 0000000..e69de29
++diff --git a/src/action.rs b/src/action.rs
++index 321ec35..87f55a5 100644
++--- a/src/action.rs
+++++ b/src/action.rs
++@@ -1,4 +1,4 @@
++-use serde::Deserialize;
+++use serde::{Deserialize, Serialize};
++ use serde_json;
++ 
++ #[derive(Deserialize)]
++@@ -7,6 +7,43 @@ pub struct ListdActionPayload {
++     pub player_id: String,
++ }
++ 
+++//###* {"command":"listd","result":[]}
+++//*###
+++
+++#[derive(Deserialize)]
+++pub struct ListdOutPutPayload {
+++    pub command: String, //"listd"固定。一応解析した文字列がただしいのかどうかを確かめるために使う？？
+++    pub result: Vec<ListdResult>, //ListdResult[]と同義
+++}
+++#[derive(Serialize, Deserialize)]
+++pub struct ListdResult {
+++    #[serde(rename = "activeSessionId")]
+++    pub active_session_id: String,
+++    #[serde(rename = "clientId")]
+++    pub client_id: String,
+++    pub color: String,
+++    #[serde(rename = "deviceSessionId")]
+++    pub device_session_id: String,
+++    #[serde(rename = "globalMultiplayerCorrelationId")]
+++    pub global_multiplayer_correlation_id: String,
+++    pub id: String, //内部的にはnumberだが、APIではstring型とされている。型変換としてSringを指定しているが問題が起きるなら別の方法を考える
+++    pub name: String,
+++    pub pfid: String,
+++    #[serde(rename = "randomId")]
+++    pub random_id: i32,
+++    #[serde(rename = "split-screen-player")]
+++    pub split_screen_player: bool,
+++    pub uuid: String,
+++    pub xuid: String,
+++}
+++//serde renameについては謎
+++
++ pub fn parse_listd_action(json_str: &str) -> Result<ListdActionPayload, serde_json::Error> {
++     serde_json::from_str(json_str)
++ }
+++
+++pub fn parse_listd_output(json_str: &str) -> Result<ListdOutPutPayload, serde_json::Error> {
+++    serde_json::from_str(json_str)
+++}
+++
+++//
++diff --git a/src/app/log_parser.rs b/src/app/log_parser.rs
++new file mode 100644
++index 0000000..845ead6
++--- /dev/null
+++++ b/src/app/log_parser.rs
++@@ -0,0 +1,75 @@
+++use crate::action::{
+++    parse_listd_action, parse_listd_output, ListdActionPayload, ListdOutPutPayload,
+++};
+++use crate::consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN};
+++use once_cell::sync::Lazy;
+++use regex::Regex;
+++use tokio::sync::mpsc;
+++
+++static LISTD_ACTION_REGEX: Lazy<Regex> =
+++    Lazy::new(|| Regex::new(LISTD_ACTION_PATTERN).expect("Failed to init LISTD_ACTION_PATTERN"));
+++
+++static LISTD_OUTPUT_REGEX: Lazy<Regex> =
+++    Lazy::new(|| Regex::new(LISTD_OUTPUT_PATTERN).expect("Failed to init LISTD_OUTPUT_PATTERN"));
+++
+++pub enum LogType {
+++    Regular(String),                 //そのまま出力
+++    Unknown(String),                 //そのまま出力
+++    ListdAction(ListdActionPayload), //[listd]{json}の形のやつ、出力しない
+++    ListdOutput(ListdOutPutPayload), //###で始まる奴、出力しない。これだけだと別の内容も拾う可能性があるのでもう少し汎用にする？
+++                                     //commandプロパティがlistdかどうかとったほうがいい
+++}
+++
+++pub struct LogParser(mpsc::Sender<LogType>);
+++
+++//ログ解析をしてLogTypeを返す(?)
+++//このログが表示されるべきかも返す
+++impl LogType {
+++    pub fn parse(log: String) -> Self {
+++        //listd_outputの処理
+++        if let Some(payload) = LISTD_OUTPUT_REGEX
+++            .captures(&log)
+++            .and_then(|caps| caps.name("json"))
+++            .and_then(|json_match| {
+++                let json_str = json_match.as_str();
+++                parse_listd_output(json_str).ok()
+++            })
+++        {
+++            if payload.command == "listd" {
+++                //解析した結果のcommandプロパティがlistdであるかどうかを確認。
+++                return LogType::ListdOutput(payload);
+++            } else {
+++                return LogType::Unknown(log); //可能性はあるので。別にエラーではない。
+++            }
+++        } else if let Some(payload) = LISTD_ACTION_REGEX
+++            .captures(&log)
+++            .and_then(|caps| caps.name("json"))
+++            .and_then(|json_match| {
+++                let json_str = json_match.as_str();
+++                parse_listd_action(json_str).ok()
+++            })
+++        {
+++            return LogType::ListdAction(payload);
+++        }
+++        //どのifにも引っかからなかったならそれは普通のログ
+++        return LogType::Regular(log);
+++    }
+++}
+++
+++//生ログを処理してLogTypeに分類して送信する
+++impl LogParser {
+++    //LogtypeSenderを受け取ってるのは使用側でreceiverを使って表示処理を行うため。こちらは送信するだけ。
+++    pub fn new(tx: mpsc::Sender<LogType>) -> Self {
+++        LogParser(tx)
+++    }
+++    //生logを受け取るためのString Receiverを受け取って、自身のLogtypeSenderでLogTypeReceiverに送信する
+++    pub async fn run(self, mut rx: mpsc::Receiver<String>) {
+++        while let Some(log) = rx.recv().await {
+++            let parsed_log_type = LogType::parse(log);
+++            if let Err(e) = self.0.send(parsed_log_type).await {
+++                eprintln!("LogParser: Failed to send parsed log: {}", e);
+++                break;
+++            }
+++        }
+++    }
+++}
++diff --git a/src/app/mod.rs b/src/app/mod.rs
++index 1477f9c..c55b977 100644
++--- a/src/app/mod.rs
+++++ b/src/app/mod.rs
++@@ -1,6 +1,9 @@
+++mod log_parser;
++ mod stream;
+++use log_parser::{LogParser, LogType};
++ use std::path::Path;
++ use std::process::Stdio;
+++use stream::LogDelimiterStream;
++ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
++ use tokio::process::{ChildStdin, ChildStdout, Command};
++ use tokio::sync::mpsc;
++@@ -17,6 +20,7 @@ impl App {
++             executable_name,
++         }
++     }
+++
++     pub async fn run(self) {
++         //bedrock_server.exeのパス
++         let full_path = Path::new(&self.cwd).join(&self.executable_name);
++@@ -54,7 +58,6 @@ impl App {
++         let mut stdin_reader = BufReader::new(tokio::io::stdin());
++         let mut line = String::new();
++         loop {
++-            //あとで読むの失敗したくらいで終了しないようにハンドリングしておく
++             let bytes_read_res = stdin_reader.read_line(&mut line).await;
++             match bytes_read_res {
++                 Ok(bytes_read) => {
++@@ -98,24 +101,39 @@ impl App {
++     }
++ 
++     //3.子プロセスの出力をprintlfで表示する。1と2と3でこのプログラムを挟まないのと同じ動作を実現する。
+++    //LogDelimiterとLogParserが存在する
+++    //LogParserが解析すべきログであった場合にprintlnされないようにする
++     async fn handle_child_stdout(child_stdout: ChildStdout) {
++-        //子プロセスの出力をBufReaderでラップ
++-        let mut child_stdout_reader = BufReader::new(child_stdout);
++-        //lineを初期化
++-        let mut line = String::new();
+++        let mut stream = LogDelimiterStream::new(child_stdout);
+++        let (log_tx, log_rx) = mpsc::channel::<String>(100);
+++        let (logtype_tx, mut logtype_rx) = mpsc::channel::<LogType>(100);
+++        tokio::spawn(async move {
+++            while let Some(entry) = stream.next().await {
+++                if let Err(e) = log_tx.send(entry).await {
+++                    eprintln!("App: Failed to send log entry to parser channel: {}", e);
+++                    break;
+++                }
+++            }
+++        });
++ 
++-        loop {
++-            let bytes_read = child_stdout_reader
++-                .read_line(&mut line)
++-                .await
++-                .expect("Failed to read from child stdout");
++-            if bytes_read == 0 {
++-                //read_lineがbyte0で返すときは子プロセスが終了したことを表す
++-                break;
+++        let parser = LogParser::new(logtype_tx);
+++        tokio::spawn(parser.run(log_rx));
+++
+++        while let Some(logtype) = logtype_rx.recv().await {
+++            match logtype {
+++                LogType::ListdOutput(payload) => {
+++                    println!()
+++                }
+++                LogType::ListdAction(payload) => {
+++                    println!()
+++                }
+++                LogType::Unknown(log) => {
+++                    println!("{}", log.trim_end());
+++                }
+++                LogType::Regular(log) => {
+++                    println!("{}", log.trim_end());
+++                }
++             }
++-            println!("{}", line.trim_end());
++-            //lineを空にする
++-            line.clear();
++         }
++     }
++ }
++diff --git a/src/app/stream.rs b/src/app/stream.rs
++index 05f0d79..f7f5d81 100644
++--- a/src/app/stream.rs
+++++ b/src/app/stream.rs
++@@ -16,13 +16,72 @@ fn remove_newline_suffix(s: &str) -> &str {
++ pub struct LogDelimiterStream(mpsc::Receiver<String>);
++ 
++ impl LogDelimiterStream {
++-    pub fn new(stdout: ChildStdout) {
+++    pub fn new(stdout: ChildStdout) -> Self {
++         let (tx, rx) = mpsc::channel::<String>(100);
++         tokio::spawn(Self::run(stdout, tx));
++-        Self(rx);
+++        Self(rx)
+++        //;を記述すると式ではなく文として評価されるためreturnされないことに注意
++     }
++-    fn run(stdout: ChildStdout, tx: Sender<String>) {
+++    async fn run(stdout: ChildStdout, tx: Sender<String>) {
++         let mut reader = BufReader::new(stdout);
++         let mut line_buffer = String::new();
+++        let mut current_log_message_buffer = String::new(); //ログのひとまとまり
+++
+++        let idle_timeout = Duration::from_millis(50);
+++
+++        loop {
+++            line_buffer.clear(); //line_bufferを初期化
+++
+++            tokio::select! {
+++                //read_resはbyte,line_bufferはString,current_log_message_bufferは最後にぶち込まれる
+++                //pattern1 タイムアウトせずに読めた時
+++                read_byte = reader.read_line(&mut line_buffer) => {//?
+++                    match read_byte {
+++                        //EOF
+++                        Ok(0) => {
+++                            if !current_log_message_buffer.is_empty() {
+++                                if let Err(e) = tx.send(remove_newline_suffix(&current_log_message_buffer).to_string()).await {
+++                                    eprintln!("LogDelimiterStream: Error sending remaining buffer on EOF:  {}",e)
+++                                }
+++                            }
+++                            break;
+++
+++                        },
+++                        //読み込みおｋ
+++                        Ok(_) => {
+++                            //log prefixに合致するか確認する
+++                            if LOG_PREFIX_REGEX.is_match(&line_buffer) && !current_log_message_buffer.is_empty() {
+++                                if let Err(e) = tx.send(remove_newline_suffix(&current_log_message_buffer).to_string()).await {
+++                                  eprintln!("LogDelimiterStream: Error sending bufferd log: {}",e);
+++                                  break;
+++                                }
+++                                current_log_message_buffer.clear();
+++                            }
+++                            //lineをおおきいbufferに積んでいく
+++                            current_log_message_buffer.push_str(&line_buffer);
+++                        },
+++
+++                        //Error時。clearしてcontinueすべき？
+++                        Err(e)=>{
+++                            eprintln!("LogDelimiterStream: Error reading from child stdout: {}",e);
+++                            break;
+++                        }
+++                    }
+++                },
+++                //pattern2 タイムアウト時
+++                _ = sleep(idle_timeout), if !current_log_message_buffer.is_empty() => {
+++                    //タイムアウトしててもバッファにデータがあるなら送信する
+++                    if let Err(e) = tx.send(remove_newline_suffix(&current_log_message_buffer).to_string()).await {
+++                        eprintln!("LogDelimiterStream: Error sending buffered log due to timeout: {}",e);
+++                    }
+++                    current_log_message_buffer.clear();
+++                }
+++            }
+++        }
+++    }
+++
+++    //receiverが受け取った要素を取り出す為に使う。
+++    pub async fn next(&mut self) -> Option<String> {
+++        self.0.recv().await
++     }
++ }
++diff --git a/src/consts.rs b/src/consts.rs
++index 6164db7..49bf0f6 100644
++--- a/src/consts.rs
+++++ b/src/consts.rs
++@@ -1,2 +1,8 @@
++ pub const LOG_PREFIX: &str = r"^(NO LOG FILE! - )?\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}";
++-pub const ACTION_MESSAGE_PREFIX: &str = r"\[Listd\] (?P<json>\{.*\})";
+++//[Listd] {json}
+++pub const LISTD_ACTION_PATTERN: &str = r"\[Listd\] (?P<json>\{.*\})";
+++//listdの始点と末端のマーカー。いる？？？
+++//pub const COMMAND_RESULT_PREFIX: &str = "###*";
+++//pub const COMMAND_RESULT_SUFFIX: &str = "*###";
+++//listd本体の解析
+++pub const LISTD_OUTPUT_PATTERN: &str = r"###\*(?P<json>.*)\*###";
++diff --git a/src/log_parser.rs b/src/log_parser.rs
++deleted file mode 100644
++index 1a040ca..0000000
++--- a/src/log_parser.rs
+++++ /dev/null
++@@ -1,2 +0,0 @@
++-static ACTION_MESSAGE_REGEX: Lazy<Regex> =
++-    Lazy::new(|| Regex::new(ACTION_MESSAGE_PREFIX).expect("Failed to init ACTION_MESSAGE_REGEX"));
+diff --git a/src/action.rs b/src/action.rs
+deleted file mode 100644
+index 87f55a5..0000000
+--- a/src/action.rs
++++ /dev/null
+@@ -1,49 +0,0 @@
+-use serde::{Deserialize, Serialize};
+-use serde_json;
+-
+-#[derive(Deserialize)]
+-pub struct ListdActionPayload {
+-    pub is_stats: bool,
+-    pub player_id: String,
+-}
+-
+-//###* {"command":"listd","result":[]}
+-//*###
+-
+-#[derive(Deserialize)]
+-pub struct ListdOutPutPayload {
+-    pub command: String, //"listd"固定。一応解析した文字列がただしいのかどうかを確かめるために使う？？
+-    pub result: Vec<ListdResult>, //ListdResult[]と同義
+-}
+-#[derive(Serialize, Deserialize)]
+-pub struct ListdResult {
+-    #[serde(rename = "activeSessionId")]
+-    pub active_session_id: String,
+-    #[serde(rename = "clientId")]
+-    pub client_id: String,
+-    pub color: String,
+-    #[serde(rename = "deviceSessionId")]
+-    pub device_session_id: String,
+-    #[serde(rename = "globalMultiplayerCorrelationId")]
+-    pub global_multiplayer_correlation_id: String,
+-    pub id: String, //内部的にはnumberだが、APIではstring型とされている。型変換としてSringを指定しているが問題が起きるなら別の方法を考える
+-    pub name: String,
+-    pub pfid: String,
+-    #[serde(rename = "randomId")]
+-    pub random_id: i32,
+-    #[serde(rename = "split-screen-player")]
+-    pub split_screen_player: bool,
+-    pub uuid: String,
+-    pub xuid: String,
+-}
+-//serde renameについては謎
+-
+-pub fn parse_listd_action(json_str: &str) -> Result<ListdActionPayload, serde_json::Error> {
+-    serde_json::from_str(json_str)
+-}
+-
+-pub fn parse_listd_output(json_str: &str) -> Result<ListdOutPutPayload, serde_json::Error> {
+-    serde_json::from_str(json_str)
+-}
+-
+-//
+diff --git a/src/app/action.rs b/src/app/action.rs
+new file mode 100644
+index 0000000..39d7988
+--- /dev/null
++++ b/src/app/action.rs
+@@ -0,0 +1,74 @@
++use serde::{Deserialize, Serialize};
++use serde_json;
++pub type PlayerId = i64;
++
++#[derive(Deserialize, Clone)]
++pub struct ListdAction {
++    #[serde(rename = "isStats")]
++    pub is_stats: bool,
++    #[serde(rename = "playerId")]
++    pub player_id: PlayerId,
++}
++
++#[derive(Deserialize)]
++pub struct ListdInfo {
++    pub command: String,
++    pub result: Vec<ListdResult>,
++}
++#[derive(Serialize, Deserialize)]
++pub struct ListdResult {
++    #[serde(rename = "activeSessionId")]
++    pub active_session_id: String,
++    #[serde(rename = "clientId")]
++    pub client_id: String,
++    pub color: String,
++    #[serde(rename = "deviceSessionId")]
++    pub device_session_id: String,
++    #[serde(rename = "globalMultiplayerCorrelationId")]
++    pub global_multiplayer_correlation_id: String,
++    pub id: PlayerId,
++    pub name: String,
++    pub pfid: String,
++    #[serde(rename = "randomId")]
++    pub random_id: u64,
++    #[serde(rename = "split-screen-player")]
++    pub split_screen_player: bool,
++    pub uuid: String,
++    pub xuid: String,
++    //stats
++    #[serde(default)]
++    pub avgpacketloss: Option<f64>,
++    #[serde(default)]
++    pub avgping: Option<i64>,
++    #[serde(default)]
++    pub maxbps: Option<i64>,
++    #[serde(default)]
++    pub packetloss: Option<f64>,
++    #[serde(default)]
++    pub ping: Option<i64>,
++}
++
++#[derive(Serialize, Deserialize)]
++pub struct ListdCustomResult {
++    pub success: bool,
++    pub player_id: PlayerId,
++    pub is_stats: bool,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub data: Option<ListdResult>,
++}
++
++pub type ListdResults = Vec<ListdResult>;
++
++pub fn parse_listd_action(json_str: &str) -> Result<ListdAction, serde_json::Error> {
++    serde_json::from_str(json_str)
++}
++
++pub fn parse_listd_info(json_str: &str) -> Result<ListdInfo, serde_json::Error> {
++    serde_json::from_str(json_str)
++}
++
++pub fn stringify_listd_custom_result(
++    result: ListdCustomResult,
++) -> Result<String, serde_json::Error> {
++    serde_json::to_string(&result)
++}
+diff --git a/src/consts.rs b/src/app/consts.rs
+similarity index 54%
+rename from src/consts.rs
+rename to src/app/consts.rs
+index 49bf0f6..ab0f8eb 100644
+--- a/src/consts.rs
++++ b/src/app/consts.rs
+@@ -1,8 +1,9 @@
+ pub const LOG_PREFIX: &str = r"^(NO LOG FILE! - )?\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}";
+ //[Listd] {json}
+-pub const LISTD_ACTION_PATTERN: &str = r"\[Listd\] (?P<json>\{.*\})";
++pub const LISTD_ACTION_PATTERN: &str = r".*\[Scripting\] listd:(?P<json>\{.*\})";
+ //listdの始点と末端のマーカー。いる？？？
+ //pub const COMMAND_RESULT_PREFIX: &str = "###*";
+ //pub const COMMAND_RESULT_SUFFIX: &str = "*###";
+ //listd本体の解析
+-pub const LISTD_OUTPUT_PATTERN: &str = r"###\*(?P<json>.*)\*###";
++pub const LISTD_OUTPUT_PATTERN: &str = r"###\*(?s)(?<json>.*?)\*###";
++//[2025-05-25 17:24:39:368 WARN] [Scripting] listd:{"is_stats":true,"player_id":34423423423}
+diff --git a/src/app/listd_manager.rs b/src/app/listd_manager.rs
+new file mode 100644
+index 0000000..eec6b4e
+--- /dev/null
++++ b/src/app/listd_manager.rs
+@@ -0,0 +1,142 @@
++use std::{collections::HashMap, sync::Arc, time::Duration};
++use tokio::sync::{mpsc, oneshot, Mutex};
++
++use crate::app::utils::execute_command;
++
++use super::action::{
++    stringify_listd_custom_result, ListdAction, ListdCustomResult, ListdResults, PlayerId,
++};
++pub struct ListdManager {
++    bds_stdin_tx: mpsc::Sender<String>,
++    requests: Mutex<HashMap<RequestKey, oneshot::Sender<ListdCustomResult>>>,
++}
++#[derive(PartialEq, Eq, Hash, Clone)]
++struct RequestKey {
++    pub player_id: PlayerId,
++    pub is_stats: bool,
++}
++
++impl ListdManager {
++    pub fn new(tx: mpsc::Sender<String>) -> Self {
++        let requests = HashMap::new();
++        ListdManager {
++            bds_stdin_tx: tx,
++            requests: Mutex::new(requests),
++        }
++    }
++    pub async fn run(
++        self,
++        action_rx: mpsc::Receiver<ListdAction>,
++        info_rx: mpsc::Receiver<ListdResults>,
++    ) {
++        let manager = Arc::new(self);
++        let action_manager = manager.clone();
++        tokio::spawn(async move { action_manager.handle_listd_action(action_rx).await });
++        let info_manager = manager.clone();
++        tokio::spawn(async move { info_manager.handle_listd_info(info_rx).await });
++    }
++    async fn handle_listd_action(self: Arc<Self>, mut rx: mpsc::Receiver<ListdAction>) {
++        while let Some(action) = rx.recv().await {
++            let request_key = RequestKey {
++                player_id: action.player_id.clone(),
++                is_stats: action.is_stats,
++            };
++            let request_key_spawn = request_key.clone();
++            let is_stats = action.is_stats;
++            let listd = if is_stats { "listd stats" } else { "listd" };
++
++            let (tx, rx_oneshot) = oneshot::channel::<ListdCustomResult>();
++            {
++                let mut requests_guard = self.requests.lock().await;
++                requests_guard.insert(request_key, tx);
++            }
++
++            if let Err(e) = execute_command(&self.bds_stdin_tx, &listd).await {
++                eprintln!("Failed to send message. {}", e);
++                let mut requests_guard = self.requests.lock().await;
++                requests_guard.remove(&request_key_spawn);
++                continue;
++            }
++
++            let manager = self.clone();
++            let player_id = action.player_id;
++            tokio::spawn(async move {
++                let timeout_duration = Duration::from_secs(5);
++
++                match tokio::time::timeout(timeout_duration, rx_oneshot).await {
++                    Ok(Ok(result)) => {
++                        if let Some(serialized) = stringify_listd_custom_result(result).ok() {
++                            let scriptevent = format!("scriptevent listd:result {}\n", serialized);
++                            if let Err(e) =
++                                execute_command(&manager.bds_stdin_tx, &scriptevent).await
++                            {
++                                eprintln!("Failed to send message. {}", e);
++                            }
++                        }
++                    }
++                    Ok(Err(_)) => {
++                        //senderがdropした場合など
++                        eprintln!(
++                            "Task: Oneshot sender for player {} was dropped unexpectedly.",
++                            player_id
++                        );
++                        let mut requests_guard = manager.requests.lock().await;
++                        requests_guard.remove(&request_key_spawn);
++                    }
++                    Err(_) => {
++                        //timeout
++                        eprintln!(
++                            "Task: Timeout waiting for listd result for player {}",
++                            player_id
++                        );
++                        let mut requests_guard = manager.requests.lock().await;
++                        requests_guard.remove(&request_key_spawn);
++                        let result = ListdCustomResult {
++                            success: false,
++                            player_id: request_key_spawn.player_id.clone(),
++                            is_stats: request_key_spawn.is_stats,
++                            data: None,
++                        };
++                        if let Some(serialized) = stringify_listd_custom_result(result).ok() {
++                            let scriptevent = format!("scriptevent listd:result {}", serialized);
++                            if let Err(e) =
++                                execute_command(&manager.bds_stdin_tx, &scriptevent).await
++                            {
++                                eprintln!(
++                                    "Task: Failed to send timeout scriptevent for player {}: {}",
++                                    player_id, e
++                                );
++                            };
++                        }
++                    }
++                }
++            });
++        }
++    }
++
++    async fn handle_listd_info(self: Arc<Self>, mut rx: mpsc::Receiver<ListdResults>) {
++        while let Some(results) = rx.recv().await {
++            let is_stats = results[0].ping.is_some();
++            for result in results {
++                let player_id = result.id.clone();
++                let request_key = RequestKey {
++                    player_id: player_id,
++                    is_stats: is_stats,
++                };
++                let mut requests_guard = self.requests.lock().await;
++                if let Some(tx) = requests_guard.remove(&request_key) {
++                    drop(requests_guard);
++                    let custom_result = ListdCustomResult {
++                        success: true,
++                        player_id: request_key.player_id,
++                        is_stats: request_key.is_stats,
++                        data: Some(result),
++                    };
++                    if let Err(e) = tx.send(custom_result) {
++                        eprintln!("Output: Non-stats request for player: {}", e.player_id)
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/src/app/log_parser.rs b/src/app/log_parser.rs
+index 845ead6..caca4a1 100644
+--- a/src/app/log_parser.rs
++++ b/src/app/log_parser.rs
+@@ -1,7 +1,5 @@
+-use crate::action::{
+-    parse_listd_action, parse_listd_output, ListdActionPayload, ListdOutPutPayload,
+-};
+-use crate::consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN};
++use super::action::{parse_listd_action, parse_listd_info, ListdAction, ListdResults};
++use super::consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN};
+ use once_cell::sync::Lazy;
+ use regex::Regex;
+ use tokio::sync::mpsc;
+@@ -13,11 +11,10 @@ static LISTD_OUTPUT_REGEX: Lazy<Regex> =
+     Lazy::new(|| Regex::new(LISTD_OUTPUT_PATTERN).expect("Failed to init LISTD_OUTPUT_PATTERN"));
+ 
+ pub enum LogType {
+-    Regular(String),                 //そのまま出力
+-    Unknown(String),                 //そのまま出力
+-    ListdAction(ListdActionPayload), //[listd]{json}の形のやつ、出力しない
+-    ListdOutput(ListdOutPutPayload), //###で始まる奴、出力しない。これだけだと別の内容も拾う可能性があるのでもう少し汎用にする？
+-                                     //commandプロパティがlistdかどうかとったほうがいい
++    Regular(String),            //そのまま出力
++    Unknown(String),            //そのまま出力
++    ListdAction(ListdAction),   //[listd]{json}の形のやつ、出力しない
++    ListdResults(ListdResults), //###で始まる奴、出力しない。これだけだと別の内容も拾う可能性があるのでもう少し汎用にする？
+ }
+ 
+ pub struct LogParser(mpsc::Sender<LogType>);
+@@ -26,19 +23,26 @@ pub struct LogParser(mpsc::Sender<LogType>);
+ //このログが表示されるべきかも返す
+ impl LogType {
+     pub fn parse(log: String) -> Self {
+-        //listd_outputの処理
+         if let Some(payload) = LISTD_OUTPUT_REGEX
+             .captures(&log)
+             .and_then(|caps| caps.name("json"))
+             .and_then(|json_match| {
+                 let json_str = json_match.as_str();
+-                parse_listd_output(json_str).ok()
++                parse_listd_info(json_str).ok()
+             })
+         {
+             if payload.command == "listd" {
+-                //解析した結果のcommandプロパティがlistdであるかどうかを確認。
+-                return LogType::ListdOutput(payload);
++                if payload.result.is_empty() {
++                    println!("Unknown");
++                    return LogType::Unknown(log);
++                } else {
++                    let listd_results = payload.result; //resultプロパティを代入。
++                    println!("Results");
++                    return LogType::ListdResults(listd_results);
++                }
++                //解析した結果のcommandプロパティがlistdであるかどうかを確認
+             } else {
++                println!("Unknown");
+                 return LogType::Unknown(log); //可能性はあるので。別にエラーではない。
+             }
+         } else if let Some(payload) = LISTD_ACTION_REGEX
+@@ -49,9 +53,11 @@ impl LogType {
+                 parse_listd_action(json_str).ok()
+             })
+         {
++            println!("Action");
+             return LogType::ListdAction(payload);
+         }
+         //どのifにも引っかからなかったならそれは普通のログ
++        println!("Regular");
+         return LogType::Regular(log);
+     }
+ }
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index c55b977..d23b9b9 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -1,11 +1,18 @@
++mod action;
++mod consts;
++mod listd_manager;
+ mod log_parser;
+ mod stream;
++mod utils;
++use action::{ListdAction, ListdResults};
++use listd_manager::ListdManager;
+ use log_parser::{LogParser, LogType};
+ use std::path::Path;
+ use std::process::Stdio;
+ use stream::LogDelimiterStream;
+ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+ use tokio::process::{ChildStdin, ChildStdout, Command};
++use tokio::signal;
+ use tokio::sync::mpsc;
+ 
+ pub struct App {
+@@ -38,18 +45,30 @@ impl App {
+         //tx:sender,rx:receiver
+         let (tx, rx) = mpsc::channel::<String>(100);
+ 
+-        //let log_action_tx = tx.clone();
++        let command_tx = tx.clone();
+ 
+         //各タスクを起動
+         tokio::spawn(Self::handle_user_input(tx));
+ 
+         tokio::spawn(Self::handle_child_stdin(rx, child_stdin));
+ 
+-        tokio::spawn(Self::handle_child_stdout(child_stdout));
++        tokio::spawn(Self::handle_child_stdout(command_tx, child_stdout));
+ 
+         //終了コードを待つ
+-        let status = child.wait().await.expect("Child process failed to exit.");
+-        println!("Child process exited with status:{}", status);
++        tokio::select! {
++            _= signal::ctrl_c() => {
++                if let Err(e) = child.kill().await {
++                    eprintln!("ERROR: Failed to kill child process: {}", e);
++                }
++            }
++            status = child.wait()=> {
++                match status {
++                    Ok(s) => println!("Child process exited with status:{}", s),
++                    Err(e) => eprintln!("ERROR: Child process failed to exit: {}", e)
++                }
++            }
++        }
++        println!("Press any key to continue...");
+     }
+ 
+     //1.キーボード入力をreceiverに送る。
+@@ -103,10 +122,10 @@ impl App {
+     //3.子プロセスの出力をprintlfで表示する。1と2と3でこのプログラムを挟まないのと同じ動作を実現する。
+     //LogDelimiterとLogParserが存在する
+     //LogParserが解析すべきログであった場合にprintlnされないようにする
+-    async fn handle_child_stdout(child_stdout: ChildStdout) {
++    async fn handle_child_stdout(command_tx: mpsc::Sender<String>, child_stdout: ChildStdout) {
+         let mut stream = LogDelimiterStream::new(child_stdout);
+         let (log_tx, log_rx) = mpsc::channel::<String>(100);
+-        let (logtype_tx, mut logtype_rx) = mpsc::channel::<LogType>(100);
++
+         tokio::spawn(async move {
+             while let Some(entry) = stream.next().await {
+                 if let Err(e) = log_tx.send(entry).await {
+@@ -116,16 +135,26 @@ impl App {
+             }
+         });
+ 
++        let (logtype_tx, mut logtype_rx) = mpsc::channel::<LogType>(50);
+         let parser = LogParser::new(logtype_tx);
+         tokio::spawn(parser.run(log_rx));
+ 
++        let (results_tx, results_rx) = mpsc::channel::<ListdResults>(50);
++        let (action_tx, action_rx) = mpsc::channel::<ListdAction>(50);
++        let manager: ListdManager = ListdManager::new(command_tx);
++        tokio::spawn(manager.run(action_rx, results_rx));
++
+         while let Some(logtype) = logtype_rx.recv().await {
+             match logtype {
+-                LogType::ListdOutput(payload) => {
+-                    println!()
++                LogType::ListdResults(results) => {
++                    if let Err(e) = results_tx.send(results).await {
++                        eprintln!("an error occured {}", e)
++                    }
+                 }
+-                LogType::ListdAction(payload) => {
+-                    println!()
++                LogType::ListdAction(action) => {
++                    if let Err(e) = action_tx.send(action).await {
++                        eprintln!("an error occured {}", e)
++                    }
+                 }
+                 LogType::Unknown(log) => {
+                     println!("{}", log.trim_end());
+diff --git a/src/app/stream.rs b/src/app/stream.rs
+index f7f5d81..b0fc51c 100644
+--- a/src/app/stream.rs
++++ b/src/app/stream.rs
+@@ -1,4 +1,4 @@
+-use crate::consts::LOG_PREFIX;
++use super::consts::LOG_PREFIX;
+ use once_cell::sync::Lazy;
+ use regex::Regex;
+ use tokio::io::{AsyncBufReadExt, BufReader};
+@@ -10,7 +10,7 @@ static LOG_PREFIX_REGEX: Lazy<Regex> =
+     Lazy::new(|| Regex::new(LOG_PREFIX).expect("Failed to init LOG_PREFIX"));
+ 
+ fn remove_newline_suffix(s: &str) -> &str {
+-    s.strip_suffix("\n").unwrap_or(s)
++    s.trim_end()
+ }
+ 
+ pub struct LogDelimiterStream(mpsc::Receiver<String>);
+diff --git a/src/app/test.rs b/src/app/test.rs
+new file mode 100644
+index 0000000..408fce4
+--- /dev/null
++++ b/src/app/test.rs
+@@ -0,0 +1,61 @@
++#[cfg(test)]
++mod tests {
++    use crate::{
++        action::{parse_listd_action, parse_listd_info},
++        consts::{LISTD_ACTION_PATTERN, LISTD_OUTPUT_PATTERN},
++    };
++    use once_cell::sync::Lazy;
++    use regex::Regex;
++    #[test]
++    fn test() {
++        static LISTD_ACTION_REGEX: Lazy<Regex> = Lazy::new(|| {
++            Regex::new(LISTD_ACTION_PATTERN).expect("Failed to init LISTD_ACTION_PATTERN")
++        });
++
++        let test = "[2025-05-25 17:24:39:368 WARN] [Scripting] listd:{\"isStats\": true, \"playerId\": 34423423423}";
++        if let Some(action) = LISTD_ACTION_REGEX
++            .captures(test)
++            .and_then(|caps| caps.name("json"))
++            .and_then(|json_match| {
++                let json_str = json_match.as_str();
++                parse_listd_action(json_str).ok()
++            })
++        {
++            println!("Action,{},{}", action.is_stats, action.player_id)
++        } else {
++            println!("Regular")
++        }
++    }
++    #[test]
++    fn test2() {
++        static LISTD_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| {
++            Regex::new(LISTD_OUTPUT_PATTERN).expect("Failed to init LISTD_OUTPUT_PATTERN")
++        });
++        let test = r#"[2025-05-25 22:27:57:120 INFO] There are 1/10 players online:
++TestPlayer2345032490
++###* {"command":"listd","result":[{"activeSessionId":"8f1b2bb7-bb90-4d05-9dfb-459480d48a79","clientId":"raknet:12410558830150752769","color":"ffededed","deviceSessionId":"c5d8f52f-ab92-373c-8f91-a9ff1f5b995b","globalMultiplayerCorrelationId":"<raknet>9e0c-7a97-2002-ff55","id":-197568495495,"name":"ACnoawer24","pfid":"f8f3fe0c2919b90b","randomId":10088606783790342701,"split-screen-player":false,"uuid":"b12818c7-d92b-3b77-a82f-65f842d5f08a","xuid":"2535436881684018"}]}
++ *###"#;
++        //println!("{}", &test);
++        if let Some(output) = LISTD_OUTPUT_REGEX
++            .captures(test)
++            .and_then(|caps| caps.name("json"))
++            .and_then(|json_match| {
++                let json_str = json_match.as_str();
++                match parse_listd_info(json_str) {
++                    Ok(parsed) => {
++                        println!("Ok");
++                        Some(parsed)
++                    }
++                    Err(e) => {
++                        eprintln!("{}", e);
++                        None
++                    }
++                }
++            })
++        {
++            println!("info");
++        } else {
++            println!("Regular")
++        }
++    }
++}
+diff --git a/src/app/utils.rs b/src/app/utils.rs
+new file mode 100644
+index 0000000..26a9f32
+--- /dev/null
++++ b/src/app/utils.rs
+@@ -0,0 +1,8 @@
++use tokio::sync::mpsc;
++
++pub async fn execute_command(
++    tx: &mpsc::Sender<String>,
++    command: &str,
++) -> Result<(), mpsc::error::SendError<String>> {
++    tx.send(format!("{}\n", command.to_string())).await
++}
+diff --git a/src/main.rs b/src/main.rs
+index 5c359e8..3073446 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,6 +1,4 @@
+-mod action;
+ mod app;
+-mod consts;
+ use app::App;
+ use std::env;
+ use tokio::main;

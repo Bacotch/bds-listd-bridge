@@ -1,11 +1,18 @@
+mod action;
+mod consts;
+mod listd_manager;
 mod log_parser;
 mod stream;
+mod utils;
+use action::{ListdAction, ListdResults};
+use listd_manager::ListdManager;
 use log_parser::{LogParser, LogType};
 use std::path::Path;
 use std::process::Stdio;
 use stream::LogDelimiterStream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::signal;
 use tokio::sync::mpsc;
 
 pub struct App {
@@ -38,18 +45,30 @@ impl App {
         //tx:sender,rx:receiver
         let (tx, rx) = mpsc::channel::<String>(100);
 
-        //let log_action_tx = tx.clone();
+        let command_tx = tx.clone();
 
         //各タスクを起動
         tokio::spawn(Self::handle_user_input(tx));
 
         tokio::spawn(Self::handle_child_stdin(rx, child_stdin));
 
-        tokio::spawn(Self::handle_child_stdout(child_stdout));
+        tokio::spawn(Self::handle_child_stdout(command_tx, child_stdout));
 
         //終了コードを待つ
-        let status = child.wait().await.expect("Child process failed to exit.");
-        println!("Child process exited with status:{}", status);
+        tokio::select! {
+            _= signal::ctrl_c() => {
+                if let Err(e) = child.kill().await {
+                    eprintln!("ERROR: Failed to kill child process: {}", e);
+                }
+            }
+            status = child.wait()=> {
+                match status {
+                    Ok(s) => println!("Child process exited with status:{}", s),
+                    Err(e) => eprintln!("ERROR: Child process failed to exit: {}", e)
+                }
+            }
+        }
+        println!("Press any key to continue...");
     }
 
     //1.キーボード入力をreceiverに送る。
@@ -103,10 +122,10 @@ impl App {
     //3.子プロセスの出力をprintlfで表示する。1と2と3でこのプログラムを挟まないのと同じ動作を実現する。
     //LogDelimiterとLogParserが存在する
     //LogParserが解析すべきログであった場合にprintlnされないようにする
-    async fn handle_child_stdout(child_stdout: ChildStdout) {
+    async fn handle_child_stdout(command_tx: mpsc::Sender<String>, child_stdout: ChildStdout) {
         let mut stream = LogDelimiterStream::new(child_stdout);
         let (log_tx, log_rx) = mpsc::channel::<String>(100);
-        let (logtype_tx, mut logtype_rx) = mpsc::channel::<LogType>(100);
+
         tokio::spawn(async move {
             while let Some(entry) = stream.next().await {
                 if let Err(e) = log_tx.send(entry).await {
@@ -116,16 +135,26 @@ impl App {
             }
         });
 
+        let (logtype_tx, mut logtype_rx) = mpsc::channel::<LogType>(50);
         let parser = LogParser::new(logtype_tx);
         tokio::spawn(parser.run(log_rx));
 
+        let (results_tx, results_rx) = mpsc::channel::<ListdResults>(50);
+        let (action_tx, action_rx) = mpsc::channel::<ListdAction>(50);
+        let manager: ListdManager = ListdManager::new(command_tx);
+        tokio::spawn(manager.run(action_rx, results_rx));
+
         while let Some(logtype) = logtype_rx.recv().await {
             match logtype {
-                LogType::ListdOutput(payload) => {
-                    println!()
+                LogType::ListdResults(results) => {
+                    if let Err(e) = results_tx.send(results).await {
+                        eprintln!("an error occured {}", e)
+                    }
                 }
-                LogType::ListdAction(payload) => {
-                    println!()
+                LogType::ListdAction(action) => {
+                    if let Err(e) = action_tx.send(action).await {
+                        eprintln!("an error occured {}", e)
+                    }
                 }
                 LogType::Unknown(log) => {
                     println!("{}", log.trim_end());
