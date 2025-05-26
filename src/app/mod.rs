@@ -29,9 +29,7 @@ impl App {
     }
 
     pub async fn run(self) {
-        //bedrock_server.exeのパス
         let full_path = Path::new(&self.cwd).join(&self.executable_name);
-        //Command::newで新しい子プロセスを起動。その後のメソッドは詳細設定
         let mut child = Command::new(&full_path)
             .current_dir(&self.cwd)
             .stdin(Stdio::piped())
@@ -42,19 +40,16 @@ impl App {
         let child_stdin = child.stdin.take().expect("Failed to take child.stdin");
         let child_stdout = child.stdout.take().expect("Failed to take child.stdout");
 
-        //tx:sender,rx:receiver
         let (tx, rx) = mpsc::channel::<String>(100);
 
         let command_tx = tx.clone();
 
-        //各タスクを起動
         tokio::spawn(Self::handle_user_input(tx));
 
         tokio::spawn(Self::handle_child_stdin(rx, child_stdin));
 
         tokio::spawn(Self::handle_child_stdout(command_tx, child_stdout));
 
-        //終了コードを待つ
         tokio::select! {
             _= signal::ctrl_c() => {
                 if let Err(e) = child.kill().await {
@@ -105,12 +100,9 @@ impl App {
         }
     }
 
-    //2.receiverから子プロセスのstdinに送る。
-    //また、任意のsenderからreceiver->child_stdinを行うためにも利用される。
     async fn handle_child_stdin(mut rx: mpsc::Receiver<String>, child_stdin: ChildStdin) {
         let mut child_stdin = child_stdin;
-        //子プロセスの標準入力を取得
-        //tx->rxの受け渡し。receiverが受け取ったString(senderから送られるのはline)をinput_lineで受け取ってる
+
         while let Some(input_line) = rx.recv().await {
             if let Err(e) = child_stdin.write_all(input_line.as_bytes()).await {
                 eprintln!("Failed to write to child stdin: {}", e);
@@ -119,9 +111,6 @@ impl App {
         }
     }
 
-    //3.子プロセスの出力をprintlfで表示する。1と2と3でこのプログラムを挟まないのと同じ動作を実現する。
-    //LogDelimiterとLogParserが存在する
-    //LogParserが解析すべきログであった場合にprintlnされないようにする
     async fn handle_child_stdout(command_tx: mpsc::Sender<String>, child_stdout: ChildStdout) {
         let mut stream = LogDelimiterStream::new(child_stdout);
         let (log_tx, log_rx) = mpsc::channel::<String>(100);

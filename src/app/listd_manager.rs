@@ -66,7 +66,7 @@ impl ListdManager {
                 match tokio::time::timeout(timeout_duration, rx_oneshot).await {
                     Ok(Ok(result)) => {
                         if let Some(serialized) = stringify_listd_custom_result(result).ok() {
-                            let scriptevent = format!("scriptevent listd:result {}\n", serialized);
+                            let scriptevent = format!("scriptevent listd:result {}", serialized);
                             if let Err(e) =
                                 execute_command(&manager.bds_stdin_tx, &scriptevent).await
                             {
@@ -75,7 +75,7 @@ impl ListdManager {
                         }
                     }
                     Ok(Err(_)) => {
-                        //senderがdropした場合など
+                        //sender dropped
                         eprintln!(
                             "Task: Oneshot sender for player {} was dropped unexpectedly.",
                             player_id
