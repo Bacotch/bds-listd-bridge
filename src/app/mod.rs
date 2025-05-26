@@ -1,11 +1,12 @@
-mod action;
+mod listd_types;
 mod consts;
 mod listd_manager;
 mod log_parser;
 mod stream;
 mod utils;
-use action::{ListdAction, ListdResults};
+use listd_types::{ListdAction, ListdResults};
 use listd_manager::ListdManager;
+use log_level::{get_log_color, reset_log_color};
 use log_parser::{LogParser, LogType};
 use std::path::Path;
 use std::process::Stdio;
@@ -14,6 +15,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::signal;
 use tokio::sync::mpsc;
+mod color;
+mod log_level;
 
 pub struct App {
     cwd: String,
@@ -149,7 +152,7 @@ impl App {
                     println!("{}", log.trim_end());
                 }
                 LogType::Regular(log) => {
-                    println!("{}", log.trim_end());
+                    println!("{}{}{}", get_log_color(&log),log.trim_end(),reset_log_color());
                 }
             }
         }
