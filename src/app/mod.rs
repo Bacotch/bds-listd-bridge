@@ -21,25 +21,29 @@ mod log_level;
 pub struct App {
     cwd: String,
     executable_name: String,
+    os:String
 }
 
 impl App {
-    pub fn new(cwd: String, executable_name: String) -> Self {
+    pub fn new(cwd: String, executable_name: String,os:String) -> Self {
         App {
             cwd,
             executable_name,
+            os,
         }
     }
 
     pub async fn run(self) {
         let full_path = Path::new(&self.cwd).join(&self.executable_name);
-        let mut child = Command::new(&full_path)
-            .current_dir(&self.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+
+        let mut command = Command::new(&full_path);
+        command.current_dir(&self.cwd).stdin(Stdio::piped()).stdout(Stdio::piped());
+        if self.os == "linux" {
+            command.env("LD_LIBRARY_PATH", ".");
+        }
+        let mut child = command
             .spawn()
             .expect("Failed to spawn child process.");
-
         let child_stdin = child.stdin.take().expect("Failed to take child.stdin");
         let child_stdout = child.stdout.take().expect("Failed to take child.stdout");
 
